@@ -18,17 +18,20 @@ namespace Login.API.Controllers
     public class UserController : ControllerBase
     {
         private readonly UserManager<IdentityUser> _userManager;
+        private readonly SignInManager<IdentityUser> _signInManager;
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _configuration;
         private readonly IEmailService _emailService;
 
         public UserController(RoleManager<IdentityRole> roleManager,
                               UserManager<IdentityUser> userManager,
+                              SignInManager<IdentityUser> signInManager,
                               IEmailService emailService,
                               IConfiguration configuration)
         {
             _roleManager = roleManager;
             _userManager = userManager;
+            _signInManager = signInManager;
             _emailService = emailService;
             _configuration = configuration;
         }
@@ -45,7 +48,8 @@ namespace Login.API.Controllers
             {
                 Email = registerUser.Email,
                 SecurityStamp = Guid.NewGuid().ToString(),
-                UserName = registerUser.Username
+                UserName = registerUser.Username,
+                TwoFactorEnabled = true
             };
 
             if (await _roleManager.RoleExistsAsync(role))
@@ -76,6 +80,18 @@ namespace Login.API.Controllers
         public async Task<IActionResult> Login([FromBody] LoginUser loginUser)
         {
             var user = await _userManager.FindByNameAsync(loginUser.Username);
+            if (user.TwoFactorEnabled)
+            {
+                await _signInManager.SignOutAsync();
+                await _signInManager.PasswordSignInAsync(user, loginUser.Password, false, true);
+                var token = await _userManager.GenerateTwoFactorTokenAsync(user, "Email");
+
+                var message = new Message(new string[] { user.Email! }, "OTP Confirmation", token!);
+                _emailService.SendEmail(message);
+
+                return StatusCode(StatusCodes.Status200OK, new Response { Status = "Success", Message = $"We have sent an OTP to your Email {user.Email}" });
+            }
+
             if (user != null && await _userManager.CheckPasswordAsync(user, loginUser.Password))
             {
                 var authClaims = new List<Claim>
@@ -90,6 +106,7 @@ namespace Login.API.Controllers
                     authClaims.Add(new Claim(ClaimTypes.Role, role));
                 }
 
+
                 var jwtToken = GetToken(authClaims);
 
                 return Ok(new
@@ -102,6 +119,41 @@ namespace Login.API.Controllers
             return Unauthorized();
         }
 
+
+        [HttpPost("LoginTwoFactor")]
+        [AllowAnonymous]
+        public async Task<IActionResult> LoginTwoFactor(string code, string userName)
+        {
+            var user = await _userManager.FindByNameAsync(userName);
+            var signIn = await _signInManager.TwoFactorSignInAsync("Email", code, false, false);
+            if (signIn.Succeeded)
+            {
+                if (user != null)
+                {
+                    var authClaims = new List<Claim>
+                {
+                    new Claim(ClaimTypes.Name, user.UserName),
+                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                };
+
+                    var userRoles = await _userManager.GetRolesAsync(user);
+                    foreach (var role in userRoles)
+                    {
+                        authClaims.Add(new Claim(ClaimTypes.Role, role));
+                    }
+
+                    var jwtToken = GetToken(authClaims);
+
+                    return Ok(new
+                    {
+                        token = new JwtSecurityTokenHandler().WriteToken(jwtToken),
+                        SecurityTokenNoExpirationException = jwtToken.ValidTo
+                    });
+
+                }
+            }
+            return StatusCode(StatusCodes.Status404NotFound, new Response { Status = "NotFound", Message = $"We have sent an OTP to your Email {user.Email}" });
+        }
         private JwtSecurityToken GetToken(List<Claim> authClaims)
         {
             var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
