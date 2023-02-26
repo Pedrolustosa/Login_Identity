@@ -29,7 +29,7 @@ namespace Login.API.Controllers
         {
             var userExist = await _userManager.FindByEmailAsync(registerUser.Email);
             if (userExist != null)
-                return StatusCode(StatusCodes.Status403Forbidden, new Response { Status = "Error", Message = "Exist User!" });
+                return StatusCode(StatusCodes.Status403Forbidden, new Response { Status = "Error", Message = "Exist User with this Email!" });
 
             IdentityUser identityUser = new()
             {
