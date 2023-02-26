@@ -1,5 +1,7 @@
 using Login.API.Models;
 using Login.API.Models.Authentication.SignUp;
+using Login.Service.Models;
+using Login.Service.Service;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -12,15 +14,15 @@ namespace Login.API.Controllers
     {
         private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
-        private readonly IConfiguration _configuration;
+        private readonly IEmailService _emailService;
 
-        public UserController(IConfiguration configuration,
-                              RoleManager<IdentityRole> roleManager,
-                              UserManager<IdentityUser> userManager)
+        public UserController(RoleManager<IdentityRole> roleManager,
+                              UserManager<IdentityUser> userManager,
+                              IEmailService emailService)
         {
-            _configuration = configuration;
             _roleManager = roleManager;
             _userManager = userManager;
+            _emailService = emailService;
         }
 
         [HttpPost("Register")]
@@ -38,10 +40,10 @@ namespace Login.API.Controllers
                 UserName = registerUser.Username
             };
 
-            if(await _roleManager.RoleExistsAsync(role))
+            if (await _roleManager.RoleExistsAsync(role))
             {
                 var result = await _userManager.CreateAsync(identityUser, registerUser.Password);
-                if(!result.Succeeded)
+                if (!result.Succeeded)
                 {
                     return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User Failed to Create" });
                 }
@@ -54,5 +56,15 @@ namespace Login.API.Controllers
             }
 
         }
+
+        [HttpGet("SendEmail")]
+        public IActionResult TestEmail()
+        {
+            var message = new Message(new string[] { "pedroeternalss@gmail.com" }, "Test", "<h1>Olá</h1>");
+            _emailService.SendEmail(message);
+
+            return StatusCode(StatusCodes.Status200OK, new Response { Status = "Success", Message = "Email sent Successfully" });
+        }
+
     }
 }
