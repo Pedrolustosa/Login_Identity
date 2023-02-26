@@ -1,10 +1,15 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using Login.API.Models;
+using Login.API.Models.Authentication.Login;
 using Login.API.Models.Authentication.SignUp;
 using Login.Service.Models;
 using Login.Service.Service;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Login.API.Controllers
 {
@@ -14,15 +19,18 @@ namespace Login.API.Controllers
     {
         private readonly UserManager<IdentityUser> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
+        private readonly IConfiguration _configuration;
         private readonly IEmailService _emailService;
 
         public UserController(RoleManager<IdentityRole> roleManager,
                               UserManager<IdentityUser> userManager,
-                              IEmailService emailService)
+                              IEmailService emailService,
+                              IConfiguration configuration)
         {
             _roleManager = roleManager;
             _userManager = userManager;
             _emailService = emailService;
+            _configuration = configuration;
         }
 
         [HttpPost("Register")]
@@ -48,13 +56,81 @@ namespace Login.API.Controllers
                     return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User Failed to Create" });
                 }
                 await _userManager.AddToRoleAsync(identityUser, role);
-                return StatusCode(StatusCodes.Status200OK, new Response { Status = "Success", Message = "User Created!" });
+
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(identityUser);
+                var confirmationLink = Url.Action(nameof(ConfirmEmail), "User", new { token, email = identityUser.Email });
+                var message = new Message(new string[] { identityUser.Email! }, "Confirmation email link", confirmationLink!);
+                _emailService.SendEmail(message);
+
+                return StatusCode(StatusCodes.Status200OK, new Response { Status = "Success", Message = $"User Created and email sent to {registerUser.Email} successfully" });
             }
             else
             {
                 return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "Role not exits!" });
             }
 
+        }
+
+        [HttpPost("Login")]
+        [AllowAnonymous]
+        public async Task<IActionResult> Login([FromBody] LoginUser loginUser)
+        {
+            var user = await _userManager.FindByNameAsync(loginUser.Username);
+            if (user != null && await _userManager.CheckPasswordAsync(user, loginUser.Password))
+            {
+                var authClaims = new List<Claim>
+                {
+                    new Claim(ClaimTypes.Name, user.UserName),
+                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                };
+
+                var userRoles = await _userManager.GetRolesAsync(user);
+                foreach (var role in userRoles)
+                {
+                    authClaims.Add(new Claim(ClaimTypes.Role, role));
+                }
+
+                var jwtToken = GetToken(authClaims);
+
+                return Ok(new
+                {
+                    token = new JwtSecurityTokenHandler().WriteToken(jwtToken),
+                    SecurityTokenNoExpirationException = jwtToken.ValidTo
+                });
+
+            }
+            return Unauthorized();
+        }
+
+        private JwtSecurityToken GetToken(List<Claim> authClaims)
+        {
+            var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
+
+            var token = new JwtSecurityToken(
+                issuer: _configuration["JWT:ValidIssuer"],
+                audience: _configuration["JWT:ValidAudience"],
+                expires: DateTime.Now.AddHours(1),
+                claims: authClaims,
+                signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
+            );
+
+            return token;
+        }
+
+
+        [HttpGet("ConfirmEmail")]
+        public async Task<IActionResult> ConfirmEmail(string token, string email)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user != null)
+            {
+                var result = await _userManager.ConfirmEmailAsync(user, token);
+                if (result.Succeeded)
+                {
+                    return StatusCode(StatusCodes.Status200OK, new Response { Status = "Success", Message = "Email verified with successfully!" });
+                }
+            }
+            return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "THis user don't exist" });
         }
 
         [HttpGet("SendEmail")]
