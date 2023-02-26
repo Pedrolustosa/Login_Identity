@@ -10,7 +10,14 @@ var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 builder.Services.AddDbContext<LoginUserDBContext>(options => options.UseSqlServer(configuration.GetConnectionString("Login_User")));
 
-builder.Services.AddIdentity<IdentityUser, IdentityRole>()
+builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
+            {
+                options.Password.RequireDigit = false;
+                options.Password.RequireNonAlphanumeric = false;
+                options.Password.RequireLowercase = false;
+                options.Password.RequireUppercase = false;
+                options.Password.RequiredLength = 4;
+            })
 .AddEntityFrameworkStores<LoginUserDBContext>()
 .AddDefaultTokenProviders();
 
